@@ -1,7 +1,7 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import './css/PatutiGame.css';
 
-// Import sprite images so bundler can handle them:
+// Sprite imports
 import idle1 from '../images/idle-1.png';
 import idle2 from '../images/idle-2.png';
 import left1 from '../images/left-1.png';
@@ -26,407 +26,291 @@ import dock2 from '../images/dock-2.png';
 import dock3 from '../images/dock-3.png';
 import dock4 from '../images/dock-4.png';
 
-// Also import background and bullets images
-import backgroundImg from '../images/background.png';
-import areaImg from '../images/area.png';
-import bulletHImg from '../images/bullet_h.png';
-import bulletVImg from '../images/bullet_v.png';
+// Bullet imports
+import bulletH from '../images/bullet_h.png';
+import bulletV from '../images/bullet_v.png';
+
+const SPRITES = {
+  idle: [idle1, idle2],
+  left: [left1, left2, left3, left4, left6],
+  right: [right1, right2, right3, right4, right5],
+  jump: [jump1, jump2, jump3, jump4, jump5, jump6, jump7],
+  dock: [dock1, dock2, dock3, dock4, dock1]
+};
+
 
 const PatutiGame = () => {
+  const containerRef = useRef(null);
   const patutiRef = useRef(null);
-  const platformRef = useRef(null);
-  const gameContainerRef = useRef(null);
-  const lifeValueRef = useRef(null);
-  const lifeBarInnerRef = useRef(null);
-  const scoreValueRef = useRef(null);
-  const gameOverScreenRef = useRef(null);
-  const finalScoreRef = useRef(null);
-  const timeSurvivedRef = useRef(null);
+  const [life, setLife] = useState(100);
+  const [score, setScore] = useState(0);
+  const [gameRunning, setGameRunning] = useState(true);
+  const [bullets, setBullets] = useState([]);
+  const [sprite, setSprite] = useState(SPRITES.idle[0]);
+  const [timeSurvived, setTimeSurvived] = useState(0);  // <--- Add this
+  const keys = useRef({});
+  const patutiPos = useRef({ x: 0, y: 0 });
+  const animation = useRef({ current: 'idle', frame: 0, counter: 0 });
+  const jumping = useRef(false);
+  const ducking = useRef(false);
+  const jumpVelocity = useRef(0);
+  const startTime = useRef(Date.now());
 
-  const [gameState, setGameState] = useState({
-    life: 100,
-    score: 0,
-    gameRunning: true,
-    bullets: [],
-    keys: {},
-    isJumping: false,
-    isDucking: false,
-    jumpVelocity: 0,
-    startTime: Date.now(),
-    patutiPos: { x: 0, y: 0 },
-    currentAction: 'idle',
-    animationFrame: 0,
-    animationCounter: 0,
-  });
+  // Memoize platform so it doesn't recreate on every render
+  const platform = useMemo(() => ({
+    left: (window.innerWidth - 600) / 2 + 150,
+    right: (window.innerWidth - 600) / 2 + 150 + 300,
+    top: window.innerHeight - 220,
+    bottom: window.innerHeight - 100
+  }), []);
 
-  const sprites = useRef({
-    idle: [idle1, idle2],
-    left: [left1, left2, left3, left4, left6],
-    right: [right1, right2, right3, right4, right5],
-    jump: [jump1, jump2, jump3, jump4, jump5, jump6, jump7],
-    dock: [dock1, dock2, dock3, dock4, dock1],
-  });
+  // Memoize groundLevel dependent on platform
+  const groundLevel = useMemo(() => platform.top - 60, [platform]);
 
-  useEffect(() => {
-    const platformTop = window.innerHeight - 220;
-    const patutiInitial = {
-      x: (window.innerWidth - 60) / 2,
-      y: platformTop - 60,
-    };
-    setGameState(prev => ({
-      ...prev,
-      patutiPos: patutiInitial,
-    }));
+  const updatePosition = useCallback(() => {
+    if (!gameRunning) return;
+
+    let newAction = 'idle';
+    const speed = 2;
+    if (keys.current['ArrowLeft'] && patutiPos.current.x > platform.left) {
+      patutiPos.current.x -= speed;
+      newAction = 'left';
+    } else if (keys.current['ArrowRight'] && patutiPos.current.x < platform.right - 60) {
+      patutiPos.current.x += speed;
+      newAction = 'right';
+    }
+
+    if (keys.current['ArrowUp'] && !jumping.current && !ducking.current) {
+      jumping.current = true;
+      jumpVelocity.current = -18;
+      newAction = 'jump';
+    }
+
+    if (keys.current['ArrowDown'] && !jumping.current) {
+      ducking.current = true;
+      newAction = 'dock';
+    } else {
+      ducking.current = false;
+    }
+
+    if (jumping.current) {
+      patutiPos.current.y += jumpVelocity.current;
+      jumpVelocity.current += 1;
+      if (patutiPos.current.y >= groundLevel) {
+        patutiPos.current.y = groundLevel;
+        jumping.current = false;
+      }
+      newAction = 'jump';
+    }
+
+    if (ducking.current && !jumping.current) newAction = 'dock';
+
+    if (animation.current.current !== newAction) {
+      animation.current.current = newAction;
+      animation.current.frame = 0;
+      animation.current.counter = 0;
+    }
+
+    updateSprite();
+  }, [gameRunning, groundLevel, platform.left, platform.right]);
+
+  const updateSprite = () => {
+    animation.current.counter++;
+    const frameDelay = 8;
+    if (animation.current.counter >= frameDelay) {
+      animation.current.counter = 0;
+      animation.current.frame = (animation.current.frame + 1) % SPRITES[animation.current.current].length;
+    }
+    setSprite(SPRITES[animation.current.current][animation.current.frame]);
+  };
+
+  const updateBullets = useCallback(() => {
+    setBullets(prev => {
+      return prev.filter(bullet => {
+        bullet.x += bullet.speedX;
+        bullet.y += bullet.speedY;
+
+        const collided = checkCollision(bullet);
+        if (collided) {
+          hitPatuti();
+          return false;
+        }
+        if (bullet.x < -50 || bullet.y > window.innerHeight) {
+          setScore(s => s + 10);
+          return false;
+        }
+        return true;
+      });
+    });
   }, []);
 
+const gameLoop = useCallback(() => {
+  if (gameRunning) {
+    updatePosition();
+    updateBullets();
+    setScore(s => s + 1);
+    setTimeSurvived(Math.floor((Date.now() - startTime.current) / 1000));
+    requestAnimationFrame(gameLoop);
+
+  }
+  // requestAnimationFrame(gameLoop);
+}, [gameRunning, updatePosition, updateBullets]);
+
+
+
+const spawnBullet = useCallback(() => {
+  if (!gameRunning) return;
+
+  const isHorizontal = Math.random() < 0.5;
+  const bullet = {
+    id: Date.now(),
+    type: isHorizontal ? 'horizontal' : 'vertical',
+    x: isHorizontal
+      ? window.innerWidth
+      : platform.left + Math.random() * (platform.right - platform.left),
+    y: isHorizontal
+      ? platform.top - 100 + Math.random() * 100
+      : 0,
+    speedX: isHorizontal ? -(1 + Math.random() * 1) : 0,
+    speedY: isHorizontal ? 0 : 1 + Math.random() * 1
+  };
+
+  setBullets(prev => [...prev, bullet]);
+
+  if (gameRunning) {
+    setTimeout(spawnBullet, 800 + Math.random() * 1000);
+  }
+}, [gameRunning, platform.left, platform.right, platform.top]);
+
+useEffect(() => {
+  if (!gameRunning) {
+    setBullets([]);  // clear bullets on game over
+  }
+}, [gameRunning]);
+
+
+
   useEffect(() => {
-    const handleKeyDown = e => {
-      setGameState(prev => ({
-        ...prev,
-        keys: { ...prev.keys, [e.code]: true },
-      }));
+    patutiPos.current = {
+      x: (window.innerWidth - 60) / 2,
+      y: groundLevel
     };
-
-    const handleKeyUp = e => {
-      setGameState(prev => ({
-        ...prev,
-        keys: { ...prev.keys, [e.code]: false },
-      }));
-    };
-
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    gameLoop();
+    spawnBullet();
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, []);
+  }, [gameLoop, spawnBullet, groundLevel]);
 
-  const updatePatutiPosition = useCallback(() => {
-    const speed = 6;
-    const platformTop = window.innerHeight - 220;
-    const platformLeft = (window.innerWidth - 600) / 2 + 150;
-    // Removed unused platformRight variable here
+  const handleKeyDown = (e) => {
+    keys.current[e.code] = true;
+  };
 
-    let newAction = 'idle';
-    let newX = gameState.patutiPos.x;
-    let newY = gameState.patutiPos.y;
-    let { jumpVelocity, isJumping, isDucking } = gameState;
+  const handleKeyUp = (e) => {
+    keys.current[e.code] = false;
+  };
 
-    if (gameState.keys['ArrowLeft'] && newX > platformLeft) {
-      newX -= speed;
-      newAction = 'left';
-    } else if (gameState.keys['ArrowRight'] && newX < platformLeft + 300 - 60) {
-      newX += speed;
-      newAction = 'right';
-    }
-
-    if (gameState.keys['ArrowUp'] && !isJumping && !isDucking) {
-      isJumping = true;
-      jumpVelocity = -12;
-      newAction = 'jump';
-    }
-
-    if (gameState.keys['ArrowDown'] && !isJumping) {
-      if (!isDucking) {
-        isDucking = true;
-      }
-      newAction = 'dock';
-    } else {
-      if (isDucking) {
-        isDucking = false;
-      }
-    }
-
-    if (isJumping) {
-      newY += jumpVelocity;
-      jumpVelocity += 1;
-      newAction = 'jump';
-
-      if (newY >= platformTop - 60) {
-        newY = platformTop - 60;
-        isJumping = false;
-        jumpVelocity = 0;
-      }
-    }
-
-    // Update patuti DOM
-    const patuti = patutiRef.current;
-    if (patuti) {
-      patuti.style.left = `${newX}px`;
-      patuti.style.top = `${isDucking ? newY + 15 : newY}px`;
-      patuti.style.width = '60px';
-      patuti.style.height = isDucking ? '45px' : '60px';
-      patuti.src = sprites.current[newAction][
-        gameState.animationFrame % sprites.current[newAction].length
-      ];
-    }
-
-    setGameState(prev => ({
-      ...prev,
-      patutiPos: { x: newX, y: newY },
-      jumpVelocity,
-      isJumping,
-      isDucking,
-      currentAction: newAction,
-      animationFrame:
-        (prev.animationFrame + 1) % sprites.current[newAction].length,
-    }));
-  }, [gameState]);
-
-  const updateScore = useCallback(() => {
-    if (scoreValueRef.current) {
-      scoreValueRef.current.textContent = gameState.score.toString();
-    }
-  }, [gameState.score]);
-
-  const spawnBullet = useCallback(() => {
-    if (!gameState.gameRunning) return;
-
-    // Randomly choose bullet type and position
-    const isHorizontal = Math.random() > 0.5;
-    const platformLeft = (window.innerWidth - 600) / 2 + 150;
-    const platformTop = window.innerHeight - 220;
-    const speed = 5 + Math.random() * 3;
-
-    let bullet = null;
-
-    if (isHorizontal) {
-      // Horizontal bullet comes from left or right
-      const fromLeft = Math.random() > 0.5;
-      bullet = {
-        id: Date.now(),
-        x: fromLeft ? platformLeft - 40 : platformLeft + 340,
-        y: platformTop - 30 + Math.random() * 60,
-        speed: fromLeft ? speed : -speed,
-        direction: 'horizontal',
-        img: bulletHImg,
-        width: 40,
-        height: 20,
-      };
-    } else {
-      // Vertical bullet comes from top or bottom
-      const fromTop = Math.random() > 0.5;
-      bullet = {
-        id: Date.now(),
-        x: platformLeft + Math.random() * 300,
-        y: fromTop ? platformTop - 80 : platformTop + 80,
-        speed: fromTop ? speed : -speed,
-        direction: 'vertical',
-        img: bulletVImg,
-        width: 20,
-        height: 40,
-      };
-    }
-
-    setGameState(prev => ({
-      ...prev,
-      bullets: [...prev.bullets, bullet],
-    }));
-  }, [gameState.gameRunning]);
-
-  const gameOver = useCallback(() => {
-    setGameState(prev => ({ ...prev, gameRunning: false }));
-    if (gameOverScreenRef.current) {
-      gameOverScreenRef.current.style.display = 'flex';
-    }
-  }, []);
-
-  const updateBullets = useCallback(() => {
-    if (!gameState.gameRunning) return;
-
-    const platformLeft = (window.innerWidth - 600) / 2 + 150;
-    const platformTop = window.innerHeight - 220;
-
-    let newBullets = [];
-
-    gameState.bullets.forEach(bullet => {
-      let newX = bullet.x;
-      let newY = bullet.y;
-
-      if (bullet.direction === 'horizontal') {
-        newX += bullet.speed;
-      } else {
-        newY += bullet.speed;
-      }
-
-      // Remove bullets that go off screen
-      if (
-        newX < platformLeft - 50 ||
-        newX > platformLeft + 400 ||
-        newY < platformTop - 100 ||
-        newY > platformTop + 100
-      ) {
-        return;
-      }
-
-      // Collision detection with patuti
-      const patutiX = gameState.patutiPos.x;
-      const patutiY = gameState.patutiPos.y;
-      const patutiWidth = 60;
-      const patutiHeight = gameState.isDucking ? 45 : 60;
-
-      if (
-        newX < patutiX + patutiWidth &&
-        newX + bullet.width > patutiX &&
-        newY < patutiY + patutiHeight &&
-        newY + bullet.height > patutiY
-      ) {
-        // Collision: reduce life
-        const newLife = gameState.life - 10;
-        setGameState(prev => ({
-          ...prev,
-          life: newLife > 0 ? newLife : 0,
-          score: prev.score + 5,
-          bullets: prev.bullets.filter(b => b.id !== bullet.id),
-        }));
-
-        if (newLife <= 0) {
-          gameOver();
-        }
-      } else {
-        newBullets.push({ ...bullet, x: newX, y: newY });
-      }
-    });
-
-    setGameState(prev => ({
-      ...prev,
-      bullets: newBullets,
-    }));
-  }, [gameState, gameOver]);
-
-  useEffect(() => {
-    let animationId;
-
-    const gameLoop = () => {
-      updatePatutiPosition();
-      updateBullets();
-      updateScore();
-      animationId = requestAnimationFrame(gameLoop);
+  const checkCollision = (bullet) => {
+    const patutiRect = {
+      x: patutiPos.current.x,
+      y: ducking.current && !jumping.current ? patutiPos.current.y + 15 : patutiPos.current.y,
+      width: 60,
+      height: ducking.current ? 35 : 60
     };
-
-    if (gameState.gameRunning) {
-      gameLoop();
-    }
-
-    return () => cancelAnimationFrame(animationId);
-  }, [gameState.gameRunning, updatePatutiPosition, updateBullets, updateScore]);
-
-  useEffect(() => {
-    let bulletInterval;
-
-    const spawn = () => {
-      if (gameState.gameRunning) {
-        spawnBullet();
-        bulletInterval = setTimeout(spawn, 800 + Math.random() * 1000);
-      }
+    const bulletRect = {
+      x: bullet.x,
+      y: bullet.y,
+      width: bullet.type === 'horizontal' ? 40 : 20,
+      height: bullet.type === 'horizontal' ? 20 : 40
     };
+    return (
+      patutiRect.x < bulletRect.x + bulletRect.width &&
+      patutiRect.x + patutiRect.width > bulletRect.x &&
+      patutiRect.y < bulletRect.y + bulletRect.height &&
+      patutiRect.y + patutiRect.height > bulletRect.y
+    );
+  };
 
-    spawn();
-    return () => clearTimeout(bulletInterval);
-  }, [gameState.gameRunning, spawnBullet]);
+// const hitPatuti = () => {
+//   setLife(prev => {
+//     const newLife = Math.max(prev - 20, 0);
+//     if (newLife === 0) {
+//       setGameRunning(false);
+//       setBullets([]); // Clear bullets when game ends
+//       setTimeSurvived(Math.floor((Date.now() - startTime.current) / 1000));
+
+//     }
+//     return newLife;
+//   });
+// };
+
+const hitPatuti = () => {
+  setLife(prev => {
+    const newLife = Math.max(prev - 20, 0);
+    if (newLife === 0) {
+      setGameRunning(false);
+    }
+    return newLife;
+  });
+};
+
 
   return (
-    <div
-      id="gameContainer"
-      ref={gameContainerRef}
-      style={{
-        position: 'relative',
-        width: '100vw',
-        height: '100vh',
-        overflow: 'hidden',
-        backgroundImage: `url(${backgroundImg})`,
-        backgroundSize: 'cover',
-        backgroundPosition: 'center',
-      }}
-    >
+    <div ref={containerRef} className="game-container">
+      <div className="platform" />
       <img
-        id="area"
-        src={areaImg}
-        alt="game area"
-        style={{
-          position: 'absolute',
-          left: '50%',
-          top: 'calc(100vh - 220px)',
-          transform: 'translateX(-50%)',
-          width: '600px',
-          height: '200px',
-          pointerEvents: 'none',
-          userSelect: 'none',
-        }}
-      />
-      <img
-        id="patuti"
         ref={patutiRef}
-        src={idle1}
-        style={{ position: 'absolute', userSelect: 'none' }}
+        id="patuti"
+        src={sprite}
         alt="Patuti"
-      />
-      <div
-        id="platform"
-        ref={platformRef}
         style={{
-          position: 'absolute',
-          left: '50%',
-          bottom: '220px',
-          width: '600px',
-          height: '10px',
-          backgroundColor: 'rgba(0,0,0,0.3)',
-          transform: 'translateX(-50%)',
+          left: patutiPos.current.x,
+          top: ducking.current && !jumping.current ? patutiPos.current.y + 15 : patutiPos.current.y,
+          width: '60px',
+          height: ducking.current ? '45px' : '60px',
+          position: 'absolute'
         }}
       />
-
-      {gameState.bullets.map(bullet => (
-        <img
-          key={bullet.id}
-          src={bullet.img}
-          alt="bullet"
-          style={{
-            position: 'absolute',
-            left: bullet.x,
-            top: bullet.y,
-            width: bullet.width,
-            height: bullet.height,
-            userSelect: 'none',
-            pointerEvents: 'none',
-          }}
-        />
-      ))}
 
       <div className="hud">
         <div className="life-bar">
-          <span id="lifeValue" ref={lifeValueRef}>
-            {gameState.life}
-          </span>
-          <div
-            className="life-bar-inner"
-            ref={lifeBarInnerRef}
-            style={{ width: `${gameState.life}%` }}
-          ></div>
+          <span>{life}</span>
+          <div className="life-bar-bg">
+            <div className="life-bar-inner" style={{ width: `${life}%` }} />
+          </div>
         </div>
         <div className="score">
-          Score: <span id="scoreValue" ref={scoreValueRef}>{gameState.score}</span>
+          Score: <span>{score}</span>
         </div>
       </div>
 
-      <div
-        id="gameOverScreen"
-        ref={gameOverScreenRef}
-        style={{ display: 'none', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}
-      >
-        <div>Game Over</div>
-        <div>
-          Final Score: <span ref={finalScoreRef}>{gameState.score}</span>
+      {!gameRunning && (
+        <div className="game-over-screen">
+          <div className="game-over-content">
+            <h1>Game Over</h1>
+            <p>Final Score: {score}</p>
+            {/* <p>Time Survived: {Math.floor((Date.now() - startTime.current) / 1000)} seconds</p> */}
+            <p>Time Survived: {timeSurvived} seconds</p>
+
+            <button onClick={() => window.location.reload()}>Restart</button>
+          </div>
         </div>
-        <div>
-          Time Survived:{' '}
-          <span
-            ref={timeSurvivedRef}
-          >{Math.floor((Date.now() - gameState.startTime) / 1000)}</span>
-          s
-        </div>
-        <button onClick={() => window.location.reload()}>Restart</button>
-      </div>
+      )}
+
+     {gameRunning &&
+  bullets.map(bullet => (
+    <img
+      key={bullet.id}
+      src={bullet.type === 'horizontal' ? bulletH : bulletV}
+      className={`bullet bullet-${bullet.type}`}
+      style={{ left: bullet.x, top: bullet.y, position: 'absolute' }}
+      alt="Bullet"
+    />
+  ))
+}
     </div>
   );
 };
