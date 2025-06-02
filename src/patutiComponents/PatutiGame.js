@@ -47,14 +47,14 @@ const PatutiGame = () => {
   const [gameRunning, setGameRunning] = useState(true);
   const [bullets, setBullets] = useState([]);
   const [sprite, setSprite] = useState(SPRITES.idle[0]);
-  const [timeSurvived, setTimeSurvived] = useState(0);  // <--- Add this
+  // const [timeSurvived, setTimeSurvived] = useState(0);  // <--- Add this
   const keys = useRef({});
   const patutiPos = useRef({ x: 0, y: 0 });
   const animation = useRef({ current: 'idle', frame: 0, counter: 0 });
   const jumping = useRef(false);
   const ducking = useRef(false);
   const jumpVelocity = useRef(0);
-  const startTime = useRef(Date.now());
+  // const startTime = useRef(Date.now());
 
   // Memoize platform so it doesn't recreate on every render
   const platform = useMemo(() => ({
@@ -149,7 +149,7 @@ const gameLoop = useCallback(() => {
     updatePosition();
     updateBullets();
     setScore(s => s + 1);
-    setTimeSurvived(Math.floor((Date.now() - startTime.current) / 1000));
+    // setTimeSurvived(Math.floor((Date.now() - startTime.current) / 1000));
     requestAnimationFrame(gameLoop);
 
   }
@@ -293,7 +293,7 @@ const hitPatuti = () => {
             <h1>Game Over</h1>
             <p>Final Score: {score}</p>
             {/* <p>Time Survived: {Math.floor((Date.now() - startTime.current) / 1000)} seconds</p> */}
-            <p>Time Survived: {timeSurvived} seconds</p>
+            {/* <p>Time Survived: {timeSurvived} seconds</p> */}
 
             <button onClick={() => window.location.reload()}>Restart</button>
           </div>
